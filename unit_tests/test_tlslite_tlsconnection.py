@@ -11,6 +11,7 @@ except ImportError:
 
 import socket
 import threading
+import os
 
 from tlslite.recordlayer import RecordLayer
 from tlslite.messages import ServerHello, ClientHello, Alert, RecordHeader3
@@ -27,6 +28,8 @@ from tlslite.extensions import SrvSupportedVersionsExtension, \
     ServerKeyShareExtension, KeyShareEntry, HRRKeyShareExtension
 
 from unit_tests.mocksock import MockSocket
+
+TESTS_DIR = os.path.join(os.path.dirname(__file__), "..", "tests")
 
 srv_raw_key = str(
     "-----BEGIN RSA PRIVATE KEY-----\n"\
@@ -476,6 +479,115 @@ class TestRealConnection(unittest.TestCase):
         self.thread.join()
         self.client_socket.close()
         self.server_socket.close()
+
+
+class TestTLS13Resumption(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(TESTS_DIR, "serverX509Cert.pem"), "r") as f:
+            cls.cert_chain = X509CertChain([X509().parse(f.read())])
+        with open(os.path.join(TESTS_DIR, "serverX509Key.pem"), "r") as f:
+            cls.cert_key = parsePEMKey(f.read(), private=True)
+        cls.ticket_key = bytearray(b"0123456789abcdef0123456789abcdef")
+
+    def _server_connections(self, server_socket, ready_events, errors):
+        server_socket.settimeout(5)
+        try:
+            for connection_id, ready in enumerate(ready_events):
+                raw_socket, _ = server_socket.accept()
+                connection = TLSConnection(raw_socket)
+                settings = HandshakeSettings()
+                settings.minVersion = (3, 4)
+                settings.maxVersion = (3, 4)
+                if connection_id < 2:
+                    settings.ticketKeys = [self.ticket_key]
+                    settings.ticket_count = 1
+                else:
+                    settings.ticket_count = 0
+                connection.handshakeServer(
+                    certChain=self.cert_chain,
+                    privateKey=self.cert_key,
+                    settings=settings)
+                if connection_id < 2:
+                    connection.read(min=0)
+                ready.set()
+                connection.close()
+                raw_socket.close()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            for ready in ready_events:
+                ready.set()
+            server_socket.close()
+
+    def _client_connection(self, client_socket, session=None):
+        connection = TLSConnection(client_socket)
+        settings = HandshakeSettings()
+        settings.minVersion = (3, 4)
+        settings.maxVersion = (3, 4)
+        settings.keyShares = []
+        connection.handshakeClientCert(
+            serverName="localhost",
+            settings=settings,
+            session=session)
+        connection.read(min=0)
+        return connection
+
+    def test_tls13_session_tickets_are_single_use(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind(("127.0.0.1", 0))
+        server_socket.listen(3)
+        address = server_socket.getsockname()
+        ready_events = [threading.Event() for _ in range(3)]
+        errors = []
+        client_socket = None
+        thread = threading.Thread(
+            target=self._server_connections,
+            args=(server_socket, ready_events, errors))
+        thread.start()
+
+        try:
+            client_socket = socket.create_connection(address, timeout=5)
+            first = self._client_connection(client_socket)
+            self.assertFalse(first.resumed)
+            self.assertEqual((3, 4), first.version)
+            self.assertEqual(1, len(first.session.tickets))
+            session = first.session
+            first.close()
+
+            self.assertTrue(ready_events[0].wait(5))
+            self.assertFalse(errors)
+            client_socket.close()
+            client_socket = socket.create_connection(address, timeout=5)
+            second = self._client_connection(client_socket, session)
+            self.assertTrue(second.resumed)
+            self.assertEqual(0, len(session.tickets))
+            second.close()
+
+            self.assertTrue(ready_events[1].wait(5))
+            self.assertFalse(errors)
+            client_socket.close()
+            client_socket = socket.create_connection(address, timeout=5)
+            third = TLSConnection(client_socket)
+            settings = HandshakeSettings()
+            settings.minVersion = (3, 4)
+            settings.maxVersion = (3, 4)
+            settings.keyShares = []
+            third.handshakeClientCert(
+                serverName="localhost",
+                settings=settings,
+                session=session)
+            self.assertFalse(third.resumed)
+            self.assertEqual(0, len(session.tickets))
+            third.close()
+            self.assertTrue(ready_events[2].wait(5))
+            self.assertFalse(errors)
+        finally:
+            client_socket.close()
+            server_socket.close()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(errors)
 
 
 if __name__ == '__main__':

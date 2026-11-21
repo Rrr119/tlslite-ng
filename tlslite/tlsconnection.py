@@ -934,7 +934,8 @@ class TLSConnection(TLSRecordLayer):
                                       i.time + i.ticket_lifetime > now and
                                       i.time + 7 * 24 * 60 * 60 > now)
                 if session.tickets:
-                    ticket = session.tickets[0]
+                    ticket = session.tickets.pop(0)
+                    self._tls13_resumption_ticket = ticket
 
                     # ticket.time is in seconds while the obfuscated time
                     # is in ms
@@ -960,6 +961,9 @@ class TLSConnection(TLSRecordLayer):
             if idens:
                 ext.create(idens, binders)
                 clientHello.extensions.append(ext)
+                ticket_list = None
+                if self._tls13_resumption_ticket:
+                    ticket_list = [self._tls13_resumption_ticket]
 
                 # for HRR case we'll need 1st CH and HRR in handshake hashes,
                 # so pass them in, truncated CH will be added by the helpers to
@@ -967,8 +971,7 @@ class TLSConnection(TLSRecordLayer):
                 HandshakeHelpers.update_binders(clientHello,
                                                 self._handshake_hash,
                                                 settings.pskConfigs,
-                                                session.tickets if session
-                                                else None,
+                                                ticket_list,
                                                 session.resumptionMasterSecret
                                                 if session else None)
 
@@ -1067,6 +1070,9 @@ class TLSConnection(TLSRecordLayer):
 
             ext = clientHello.getExtension(ExtensionType.pre_shared_key)
             if ext:
+                ticket_list = None
+                if self._tls13_resumption_ticket:
+                    ticket_list = [self._tls13_resumption_ticket]
                 # move the extension to end (in case extension like cookie was
                 # added
                 clientHello.extensions.remove(ext)
@@ -1074,8 +1080,7 @@ class TLSConnection(TLSRecordLayer):
                 HandshakeHelpers.update_binders(clientHello,
                                                 self._handshake_hash,
                                                 settings.pskConfigs,
-                                                session.tickets if session
-                                                else None,
+                                                ticket_list,
                                                 session.resumptionMasterSecret
                                                 if session else None)
 
@@ -1308,9 +1313,17 @@ class TLSConnection(TLSRecordLayer):
                 psk = psk[0]
             else:
                 resuming = True
+                ticket = self._tls13_resumption_ticket
+                if ticket is None or ticket.ticket != ident.identity:
+                    ticket = next(
+                        (item for item in session.tickets
+                         if item.ticket == ident.identity),
+                        None)
+                if ticket is None:
+                    raise TLSIllegalParameterException(
+                        "Server selected an unknown TLS 1.3 session ticket")
                 psk = HandshakeHelpers.calc_res_binder_psk(
-                    ident, session.resumptionMasterSecret,
-                    session.tickets)
+                    ident, session.resumptionMasterSecret, [ticket])
         else:
             psk = bytearray(prf_size)
 

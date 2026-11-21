@@ -174,6 +174,8 @@ class TLSRecordLayer(object):
         self.tickets = []
         # TLS 1.2 and earlier tickets received from server
         self.tls_1_0_tickets = []
+        # TLS 1.3 ticket selected for the in-progress resumption
+        self._tls13_resumption_ticket = None
 
         # Indicator for heartbeat extension mode, if we can receive
         # heartbeat requests
@@ -1428,6 +1430,7 @@ class TLSRecordLayer(object):
         if not self.closed:
             raise ValueError("Renegotiation disallowed for security reasons")
         self._client = client
+        self._tls13_resumption_ticket = None
         self._handshake_hash = HandshakeHashes()
         self._certificate_verify_handshake_hash = None
         self._pre_client_hello_handshake_hash = None
@@ -1438,6 +1441,7 @@ class TLSRecordLayer(object):
     def _handshakeDone(self, resumed):
         self.resumed = resumed
         self.closed = False
+        self._tls13_resumption_ticket = None
 
     def _calcPendingStates(self, cipherSuite, masterSecret,
                            clientRandom, serverRandom, implementations):

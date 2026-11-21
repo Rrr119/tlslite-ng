@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid31133",
+  "B": "/home/dev/feedback/uid31133",
+  "sha": "4ced4c748f24dba2c20f5c3a48dd17e3343cb436",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "tlsfuzzer",
+    "repo": "tlslite-ng",
+    "sha": "4ced4c748f24dba2c20f5c3a48dd17e3343cb436"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "tlslite-ng",
+    "cloneUrl": "https://github.com/Rrr119/tlslite-ng.git"
+  },
+  "at": "2026-11-21T00:45:04.843Z"
+}
